@@ -17,9 +17,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-GOOGLE_SHEET_ID   = os.environ["GOOGLE_SHEET_ID"]
+TELEGRAM_TOKEN     = os.environ["TELEGRAM_TOKEN"]
+ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+GOOGLE_SHEET_ID    = os.environ["GOOGLE_SHEET_ID"]
 GOOGLE_CREDENTIALS = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 
 SCOPES = [
@@ -28,7 +28,7 @@ SCOPES = [
 ]
 
 HEADERS = ["Fecha", "Nombre", "Cargo", "Empresa", "Email",
-           "Teléfono", "Web", "LinkedIn", "Notas", "Estado"]
+           "Telefono", "Web", "LinkedIn", "Notas", "Estado"]
 
 
 def get_sheet():
@@ -43,6 +43,25 @@ def get_sheet():
 def extract_lead_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+    prompt = (
+        "Extrae la informacion de contacto de esta imagen "
+        "(puede ser tarjeta de visita, captura de LinkedIn, WhatsApp, "
+        "formulario web, perfil de red social, etc.).\n\n"
+        "Devuelve UNICAMENTE un JSON valido con estos campos "
+        "(deja el valor como cadena vacia si no aparece en la imagen):\n"
+        '{\n'
+        '  "nombre": "",\n'
+        '  "cargo": "",\n'
+        '  "empresa": "",\n'
+        '  "email": "",\n'
+        '  "telefono": "",\n'
+        '  "web": "",\n'
+        '  "linkedin": "",\n'
+        '  "notas": ""\n'
+        '}\n\n'
+        "Solo el JSON, sin texto adicional ni bloques de codigo."
+    )
 
     message = client.messages.create(
         model="claude-opus-4-8",
@@ -60,25 +79,7 @@ def extract_lead_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -
                 },
                 {
                     "type": "text",
-                    "text": (
-                        "Extrae la información de contacto de esta imagen "
-                        "(puede ser tarjeta de visita, captura de LinkedIn, WhatsApp, "
-                        "formulario web, perfil de red social, etc.).\n\n"
-                        "Devuelve ÚNICAMENTE un JSON válido con estos campos "
-                        "(deja el valor como cadena vacía \"\" si no aparece en la imagen):\n"
-                        "{\n"
-                        "  \"nombre\": \"\",\n"
-                        "  \"cargo\": \"\",\n"
-                        "  \"empresa\": \"\",\n"
-                        "  \"email\": \"\",\n"
-                        "  \"telefono\": \"\",\n"
-                        "  \"web\": \"\",\n"
-                        "  \"linkedin\": \"\",\n"
-                        "  \"notas\": \"\"
-"
-                        "}\n\n"
-                        "Solo el JSON, sin texto adicional ni bloques de código."
-                    )
+                    "text": prompt,
                 }
             ],
         }]
@@ -96,76 +97,93 @@ def extract_lead_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *Bot de Leads activo*\n\n"
-        "Mándame una foto de:\n"
-        "• Tarjeta de visita\n"
-        "• Captura de LinkedIn\n"
-        "• Screenshot de WhatsApp\n"
-        "• Cualquier perfil de contacto\n\n"
-        "Extraeré los datos y los guardaré en Google Sheets automáticamente. 🚀",
-        parse_mode="Markdown"
+        "Bot de Leads activo\n\n"
+        "Mandame una foto de:\n"
+        "- Tarjeta de visita\n"
+        "- Captura de LinkedIn\n"
+        "- Screenshot de WhatsApp\n"
+        "- Cualquier perfil de contacto\n\n"
+        "Extraere los datos y los guardare en Google Sheets automaticamente."
     )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("📸 Analizando imagen con IA...")
+    msg = await update.message.reply_text("Analizando imagen con IA...")
     try:
         photo = update.message.photo[-1]
         tg_file = await context.bot.get_file(photo.file_id)
         image_bytes = bytes(await tg_file.download_as_bytearray())
         lead = extract_lead_from_image(image_bytes)
         if not lead or not any(v for v in lead.values()):
-            await msg.edit_text("❌ No encontré datos de contacto en la imagen.")
+            await msg.edit_text("No encontre datos de contacto en la imagen.")
             return
         sheet = get_sheet()
         row = [
-            datetime.now().strftime("%d/%m/%Y"),
-            lead.get("nombre", ""), lead.get("cargo", ""), lead.get("empresa", ""),
-            lead.get("email", ""), lead.get("telefono", ""), lead.get("web", ""),
-            lead.get("linkedin", ""), lead.get("notas", ""), "Nuevo",
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            lead.get("nombre", ""),
+            lead.get("cargo", ""),
+            lead.get("empresa", ""),
+            lead.get("email", ""),
+            lead.get("telefono", ""),
+            lead.get("web", ""),
+            lead.get("linkedin", ""),
+            lead.get("notas", ""),
+            "Nuevo",
         ]
-        sheet.append_row(row, value_input_option="USER_ENTERED")
-        def f(val): return val if val else "—"
-        reply_lines = ["✅ *Lead guardado en Google Sheets*\n", f"👤 *{f(lead.get('nombre'))}*"]
-        if lead.get("cargo") or lead.get("empresa"):
-            reply_lines.append(f"💼 {f(lead.get('cargo'))} · {f(lead.get('empresa'))}")
-        if lead.get("email"): reply_lines.append(f"📧 {lead['email']}")
-        if lead.get("telefono"): reply_lines.append(f"📱 {lead['telefono']}")
-        if lead.get("web"): reply_lines.append(f"🌐 {lead['web']}")
-        if lead.get("linkedin"): reply_lines.append(f"🔗 {lead['linkedin']}")
-        if lead.get("notas"): reply_lines.append(f"\n_{lead['notas']}_")
-        await msg.edit_text("\n".join(reply_lines), parse_mode="Markdown")
+        sheet.append_row(row)
+        text = (
+            "Lead guardado en Google Sheets:\n\n"
+            + "\n".join(
+                f"{k}: {v}"
+                for k, v in zip(HEADERS, row)
+                if v and k != "Estado"
+            )
+        )
+        await msg.edit_text(text)
     except Exception as e:
-        logger.exception("Error procesando imagen")
-        await msg.edit_text(f"❌ Error: {str(e)}")
+        logger.error("Error en handle_photo: %s", e)
+        await msg.edit_text("Error al procesar la imagen. Intentalo de nuevo.")
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
-    if not doc or not doc.mime_type.startswith("image/"):
+    if not doc.mime_type or not doc.mime_type.startswith("image/"):
+        await update.message.reply_text("Solo acepto imagenes. Sube un JPG o PNG.")
         return
-    msg = await update.message.reply_text("📎 Analizando archivo de imagen...")
+    msg = await update.message.reply_text("Analizando imagen con IA...")
     try:
         tg_file = await context.bot.get_file(doc.file_id)
         image_bytes = bytes(await tg_file.download_as_bytearray())
         lead = extract_lead_from_image(image_bytes, mime_type=doc.mime_type)
         if not lead or not any(v for v in lead.values()):
-            await msg.edit_text("❌ No encontré datos de contacto en la imagen.")
+            await msg.edit_text("No encontre datos de contacto en la imagen.")
             return
         sheet = get_sheet()
         row = [
-            datetime.now().strftime("%d/%m/%Y"),
-            lead.get("nombre", ""), lead.get("cargo", ""), lead.get("empresa", ""),
-            lead.get("email", ""), lead.get("telefono", ""), lead.get("web", ""),
-            lead.get("linkedin", ""), lead.get("notas", ""), "Nuevo",
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            lead.get("nombre", ""),
+            lead.get("cargo", ""),
+            lead.get("empresa", ""),
+            lead.get("email", ""),
+            lead.get("telefono", ""),
+            lead.get("web", ""),
+            lead.get("linkedin", ""),
+            lead.get("notas", ""),
+            "Nuevo",
         ]
-        sheet.append_row(row, value_input_option="USER_ENTERED")
-        def f(val): return val if val else "—"
-        reply = f"✅ *Lead guardado*\n\n👤 *{f(lead.get('nombre'))}*\n💼 {f(lead.get('cargo'))} · {f(lead.get('empresa'))}\n📧 {f(lead.get('email'))}\n📱 {f(lead.get('telefono'))}"
-        await msg.edit_text(reply, parse_mode="Markdown")
+        sheet.append_row(row)
+        text = (
+            "Lead guardado en Google Sheets:\n\n"
+            + "\n".join(
+                f"{k}: {v}"
+                for k, v in zip(HEADERS, row)
+                if v and k != "Estado"
+            )
+        )
+        await msg.edit_text(text)
     except Exception as e:
-        logger.exception("Error procesando documento")
-        await msg.edit_text(f"❌ Error: {str(e)}")
+        logger.error("Error en handle_document: %s", e)
+        await msg.edit_text("Error al procesar la imagen. Intentalo de nuevo.")
 
 
 def main():
@@ -173,7 +191,6 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
-    logger.info("Bot de leads iniciado ✓")
     app.run_polling(drop_pending_updates=True)
 
 
